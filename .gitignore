@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.*
+*.log
+node_modules/
+dist/
+build/
+.cache/
+.vscode/
+*.local
+*.tmp
+*.bak
+data/
+docs/
+tools/
+google-apps-script/
