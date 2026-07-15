@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+    <title>Vocabulary Grid 2500 Version2</title>
+    <link rel="stylesheet" href="./styles-v2.css">
+  </head>
+  <body>
+    <main class="v2-shell">
+      <header class="v2-header">
+        <p>Vocabulary Grid 2500</p>
+        <h1>Version2 学習</h1>
+      </header>
+
+      <section id="v2LoginPanel" class="v2-section" aria-labelledby="v2LoginTitle">
+        <div class="section-heading">
+          <h2 id="v2LoginTitle">ログイン</h2>
+          <strong id="v2LoginStatus" data-state="idle">未認証</strong>
+        </div>
+        <label>
+          GAS Web App URL
+          <input id="v2Endpoint" type="url" autocomplete="url" placeholder="https://script.google.com/macros/s/.../exec">
+        </label>
+        <label>
+          User ID
+          <input id="v2UserId" type="text" autocomplete="username">
+        </label>
+        <label>
+          PIN
+          <input id="v2Pin" type="password" autocomplete="current-password" inputmode="numeric">
+        </label>
+        <button id="v2Login" class="primary-button" type="button">ログインして教材取得</button>
+      </section>
+
+      <section id="v2HomePanel" class="v2-home-panel" hidden>
+        <div id="v2HomeRoot"></div>
+        <p id="v2HomeStatus" class="home-status" data-state="idle" role="status" aria-live="polite"></p>
+      </section>
+
+      <section id="v2StudyPanel" class="v2-section" aria-labelledby="v2QuestionWord" hidden>
+        <p id="v2QuestionMeta" class="question-meta">Section -</p>
+        <h2 id="v2QuestionWord" class="question-word">word</h2>
+        <div id="v2Choices" class="choice-grid"></div>
+        <div id="v2Feedback" class="feedback" role="status" aria-live="polite"></div>
+        <p id="v2SaveStatus" class="save-status" data-state="idle" aria-live="polite">回答を選択してください</p>
+        <button id="v2RetrySync" class="retry-button" type="button" hidden>同じ回答を再送</button>
+      </section>
+    </main>
+    <script type="module" src="./src/v2/app/version2App.js"></script>
+  </body>
+</html>

@@ -1,0 +1,263 @@
+@import "./answer-feedback.css";
+
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f4f6f8;
+  color: #17212b;
+  --ink: #1f2933;
+  --muted: #617182;
+  --ok: #157347;
+  --warn-bg: #fff7e6;
+  --ok-bg: #eaf7ef;
+  --danger: #b42318;
+  --danger-bg: #fff0ed;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
+button, input { font: inherit; }
+
+.v2-shell {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  height: 100vh;
+  height: 100svh;
+  min-height: 100vh;
+  min-height: 100svh;
+  margin: 0 auto;
+  padding: 24px 18px max(24px, env(safe-area-inset-bottom));
+}
+
+.v2-header {
+  border-bottom: 3px solid #17212b;
+  padding-bottom: 14px;
+}
+
+.v2-header p,
+.question-meta {
+  margin: 0 0 4px;
+  color: #52616f;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+h1, h2 { margin: 0; letter-spacing: 0; }
+h1 { font-size: 1.75rem; }
+
+.v2-section {
+  padding: 24px 0;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.section-heading strong,
+.save-status {
+  min-height: 24px;
+  color: #52616f;
+}
+
+[data-state="saved"] { color: #067647; }
+[data-state="error"] { color: #b42318; }
+[data-state="working"],
+[data-state="pending"] { color: #8a4b08; }
+
+label {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 16px;
+  font-weight: 700;
+}
+
+input {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid #aab4be;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+button {
+  min-height: 46px;
+  border: 1px solid #17212b;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button:disabled { cursor: default; opacity: 0.58; }
+
+.primary-button {
+  width: 100%;
+  background: #17212b;
+  color: #fff;
+  font-weight: 800;
+}
+
+.v2-home-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.v2-home-panel[hidden] {
+  display: none;
+}
+
+.home-v2-host {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.home-v2-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 20px 0 max(4px, env(safe-area-inset-bottom));
+}
+
+.home-v2-heading {
+  padding-bottom: 12px;
+  border-bottom: 1px solid #aab4be;
+}
+
+.home-v2-eyebrow {
+  margin: 0 0 4px;
+  color: #52616f;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.home-v2-title {
+  margin: 0;
+  font-size: 1.55rem;
+}
+
+.home-v2-metrics {
+  display: grid;
+  margin: 14px 0 0;
+}
+
+.home-v2-metric {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 48px;
+  padding: 11px 2px;
+  border-bottom: 1px solid #d4dbe1;
+}
+
+.home-v2-metric[hidden],
+.home-v2-message[hidden],
+.home-v2-cta[hidden] {
+  display: none;
+}
+
+.home-v2-metric-label {
+  color: #52616f;
+  font-size: 0.9375rem;
+  font-weight: 700;
+}
+
+.home-v2-metric-value {
+  margin: 0;
+  color: #17212b;
+  font-size: 1.2rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.home-v2-message {
+  margin: 38px 0 0;
+  font-size: 1.1rem;
+  font-weight: 800;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.home-v2-spacer {
+  flex: 1 1 24px;
+  min-height: 18px;
+}
+
+.home-v2-cta {
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 18px;
+  background: #17212b;
+  color: #fff;
+  font-weight: 800;
+}
+
+.home-status {
+  min-height: 24px;
+  margin: 8px 0 0;
+  color: #52616f;
+  font-weight: 700;
+}
+
+.home-status:empty {
+  display: none;
+}
+
+.question-word {
+  margin: 12px 0 24px;
+  font-size: 2rem;
+}
+
+.choice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.choice-button {
+  min-height: 72px;
+  padding: 12px;
+  background: #fff;
+  color: #17212b;
+  font-weight: 700;
+}
+
+.save-status {
+  margin: 20px 0 0;
+  font-weight: 800;
+}
+
+.retry-button {
+  margin-top: 12px;
+  padding: 10px 16px;
+  background: #fff;
+  color: #17212b;
+  font-weight: 700;
+}
+
+@media (max-width: 520px) {
+  .choice-grid { grid-template-columns: 1fr; }
+  .v2-shell { padding-top: 18px; }
+}
+
+@media (max-width: 360px) {
+  .home-v2-card { padding-top: 14px; }
+  .home-v2-metrics { margin-top: 10px; }
+  .home-v2-metric {
+    min-height: 44px;
+    padding-block: 9px;
+  }
+}

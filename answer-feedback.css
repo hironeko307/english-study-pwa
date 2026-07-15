@@ -1,0 +1,118 @@
+.choice-button.correct {
+  border-color: var(--ok);
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.choice-button.incorrect {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.feedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.feedback-message {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.feedback-skip {
+  color: inherit;
+  font-size: 0.78rem;
+  opacity: 0.82;
+}
+
+.feedback-effect {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.sword-effect {
+  animation: strike-feedback 420ms ease-out both;
+}
+
+.sparkle-effect {
+  animation: sparkle-feedback 620ms ease-out both;
+}
+
+.ghost-effect {
+  animation: ghost-feedback 520ms ease-out both;
+}
+
+.feedback.correct {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.feedback.incorrect {
+  background: var(--warn-bg);
+  color: #8a5700;
+}
+
+.tap-advance-enabled .feedback.incorrect {
+  cursor: pointer;
+}
+
+@keyframes strike-feedback {
+  0% {
+    opacity: 0;
+    transform: translateX(8px) rotate(18deg) scale(0.82);
+  }
+
+  55% {
+    opacity: 1;
+    transform: translateX(0) rotate(-12deg) scale(1.12);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateX(0) rotate(0deg) scale(1);
+  }
+}
+
+@keyframes sparkle-feedback {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+
+  45% {
+    opacity: 1;
+    transform: scale(1.22);
+  }
+
+  100% {
+    opacity: 0.92;
+    transform: scale(1);
+  }
+}
+
+@keyframes ghost-feedback {
+  0% {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
