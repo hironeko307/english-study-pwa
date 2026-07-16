@@ -36,6 +36,7 @@ import {
   createReadyAnswerSubmission,
   markAnswerPersisted
 } from "./answerSubmissionState.js";
+import { createQuestionChoices } from "./version2ChoiceGenerator.js";
 import { createVersion2SpeechController } from "./version2SpeechController.js";
 import { createHomeView } from "../ui/homeView.js";
 
@@ -304,12 +305,24 @@ function renderActiveQuestion() {
   if (!question) {
     throw new Error("出題対象の単語を教材から確認できませんでした。");
   }
-  const choices = [
-    question,
-    ...contentRecords.filter((item) => item.wordId !== question.wordId)
-  ].slice(0, 4);
-  if (choices.length < 4) {
-    throw new Error("出題に必要な選択肢を取得できませんでした。");
+  let choices;
+  try {
+    choices = createQuestionChoices({
+      contentItems: contentRecords,
+      questionWordId: question.wordId,
+      sessionId: learningSession.sessionId,
+      currentPhase: learningSession.currentPhase,
+      retryRound: learningSession.currentPhase === SESSION_PHASES.immediateRetry
+        ? learningSession.retryRound
+        : 0,
+      currentIndex: learningSession.currentPhase === SESSION_PHASES.immediateRetry
+        ? dailyQueue.retryCurrentIndex
+        : dailyQueue.normalCurrentIndex
+    });
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    renderQuestionChoiceFailure();
+    return;
   }
   choiceIds = choices.map((item) => item.wordId);
   questionStartedAt = performance.now();
@@ -342,6 +355,19 @@ function renderActiveQuestion() {
     wordId: question.wordId,
     text: question.word
   });
+}
+
+function renderQuestionChoiceFailure() {
+  answerLocked = true;
+  question = null;
+  choiceIds = [];
+  elements.replaySpeech.hidden = true;
+  elements.replaySpeech.disabled = true;
+  elements.questionMeta.textContent = "出題エラー";
+  elements.questionWord.textContent = "出題に必要な選択肢を取得できませんでした。";
+  elements.choices.replaceChildren();
+  elements.saveStatus.textContent = "教材データを確認してください";
+  elements.saveStatus.dataset.state = "error";
 }
 
 function handleReplaySpeech() {
