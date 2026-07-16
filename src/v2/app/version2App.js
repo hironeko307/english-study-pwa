@@ -9,8 +9,6 @@ import { createCanonicalAnswerEvent } from "../events/answerEventFactory.js";
 import {
   applySessionAnswer,
   createInitialWordState,
-  findActiveSession,
-  findSessionByLearningDate,
   getCurrentSessionItem,
   PRESENTATION_TYPES,
   SESSION_PHASES,
@@ -24,7 +22,11 @@ import {
   invalidateAuthSession,
   restoreStudentState
 } from "../services/authContentService.js";
-import { createHomeViewModel } from "../services/homeService.js";
+import {
+  createHomeViewModel,
+  createInvalidSessionHomeViewModel
+} from "../services/homeService.js";
+import { loadSafeHomeSessionPair } from "../services/homeSessionService.js";
 import { createSpeechService } from "../services/speechService.js";
 import {
   ANSWER_SYNC_WORKER_STATES,
@@ -50,6 +52,7 @@ const elements = {
   homePanel: document.querySelector("#v2HomePanel"),
   homeRoot: document.querySelector("#v2HomeRoot"),
   homeStatus: document.querySelector("#v2HomeStatus"),
+  homeRetrySync: document.querySelector("#v2HomeRetrySync"),
   studyPanel: document.querySelector("#v2StudyPanel"),
   questionMeta: document.querySelector("#v2QuestionMeta"),
   questionWord: document.querySelector("#v2QuestionWord"),
@@ -58,7 +61,8 @@ const elements = {
   feedback: document.querySelector("#v2Feedback"),
   saveStatus: document.querySelector("#v2SaveStatus"),
   syncStatus: document.querySelector("#v2SyncStatus"),
-  retrySync: document.querySelector("#v2RetrySync")
+  retrySync: document.querySelector("#v2RetrySync"),
+  backHome: document.querySelector("#v2BackHome")
 };
 
 let repository;
@@ -68,6 +72,7 @@ let syncWorker;
 let homeView;
 let homeContext = null;
 let homeSessionPair = null;
+let homeModelData = null;
 let question;
 let choiceIds;
 let contentRecords = [];
@@ -80,14 +85,35 @@ let questionStartedAt;
 let answerLocked = false;
 let answerSubmission = createReadyAnswerSubmission();
 let pendingRecovery = null;
-let recoverySyncing = false;
+let recoveryOperationPromise = null;
+let syncRetryPromise = null;
+let homeTransitionPromise = null;
+let answerPersistenceInProgress = false;
 let loginInProgress = false;
 let feedbackTimerId = null;
 let feedbackDelayElapsed = false;
 let feedbackAdvanceCompleted = false;
 let pageHideListenerRegistered = false;
+let uiListenersRegistered = false;
 
 const SESSION_EXPIRED_MESSAGE = "セッションの有効期限が切れました。再ログインしてください";
+const SERVER_STATE_STATUSES = Object.freeze({
+  idle: "idle",
+  loading: "loading",
+  syncing: "syncing",
+  restored: "restored",
+  blocked: "blocked",
+  error: "error"
+});
+const SERVER_STATE_MESSAGES = Object.freeze({
+  idle: "ログインしてください。",
+  loading: "学習状態を確認しています…",
+  syncing: "未同期の回答を送信しています…",
+  restored: "",
+  blocked: "同期を完了できません。再試行してください。",
+  error: "学習状態を確認できませんでした。"
+});
+let serverStateStatus = SERVER_STATE_STATUSES.idle;
 const speechController = createVersion2SpeechController({
   speechService: createSpeechService()
 });
@@ -107,18 +133,26 @@ async function initialize() {
       await requireReauthentication(expiredSession);
     }
   });
-  syncWorker.subscribe(handleSyncSnapshot);
-  elements.endpoint.value = localStorage.getItem("vg2500.v2.endpoint") ?? "";
-  elements.login.addEventListener("click", handleLogin);
-  elements.retrySync.addEventListener("click", handleRetrySync);
-  elements.replaySpeech.addEventListener("click", handleReplaySpeech);
-  elements.homeRoot.addEventListener("homeactionerror", handleHomeActionError);
-  registerPageHideListener();
   homeView = createHomeView({
     root: elements.homeRoot,
     onStart: handleHomeStart,
     onResume: handleHomeResume
   });
+  elements.endpoint.value = localStorage.getItem("vg2500.v2.endpoint") ?? "";
+  registerUiListeners();
+  registerPageHideListener();
+  syncWorker.subscribe(handleSyncSnapshot);
+}
+
+function registerUiListeners() {
+  if (uiListenersRegistered) return;
+  elements.login.addEventListener("click", handleLogin);
+  elements.retrySync.addEventListener("click", handleRetrySync);
+  elements.homeRetrySync?.addEventListener("click", handleRetrySync);
+  elements.backHome?.addEventListener("click", handleBackHome);
+  elements.replaySpeech.addEventListener("click", handleReplaySpeech);
+  elements.homeRoot.addEventListener("homeactionerror", handleHomeActionError);
+  uiListenersRegistered = true;
 }
 
 async function handleLogin() {
@@ -149,19 +183,30 @@ async function handleLogin() {
     }
     if (result.authSession) authSession = result.authSession;
     if (!result.ok && result.error.code === "LOCAL_UNSYNCED_EVENTS" && authSession) {
-      enterPendingRecovery(result);
+      await enterPendingRecovery(result);
       void syncWorker.resume(authSession);
       return;
     }
     if (!result.ok) {
+      transitionServerState(SERVER_STATE_STATUSES.idle);
       setLoginStatus(result.error.message, "error");
       return;
     }
     pendingRecovery = null;
+    transitionServerState(SERVER_STATE_STATUSES.loading);
     await prepareHome(result.content, result.meta);
+    if (serverStateStatus !== SERVER_STATE_STATUSES.error) {
+      transitionServerState(SERVER_STATE_STATUSES.restored);
+    }
     void syncWorker.resume(authSession);
     setLoginStatus("認証済み", "saved");
   } catch (error) {
+    if ([
+      SERVER_STATE_STATUSES.loading,
+      SERVER_STATE_STATUSES.syncing
+    ].includes(serverStateStatus)) {
+      transitionServerState(SERVER_STATE_STATUSES.error);
+    }
     setLoginStatus(safeClientMessage(error), "error");
   } finally {
     loginInProgress = false;
@@ -169,28 +214,19 @@ async function handleLogin() {
   }
 }
 
-function enterPendingRecovery(result) {
-  speechController.cancel();
+async function enterPendingRecovery(result) {
   clearFeedbackTransition();
   resetAnswerFeedback(elements.feedback);
   elements.replaySpeech.hidden = true;
   elements.replaySpeech.disabled = true;
   pendingRecovery = Object.freeze({
     content: result.content,
-    meta: result.meta,
-    pendingCount: result.pendingEvents.length
+    meta: result.meta
   });
+  transitionServerState(SERVER_STATE_STATUSES.syncing);
   answerLocked = true;
-  answerSubmission = markAnswerPersisted(result.pendingEvents[0].event.eventId);
-  elements.loginPanel.hidden = true;
-  elements.homePanel.hidden = true;
-  elements.studyPanel.hidden = false;
-  elements.questionMeta.textContent = "同期の復旧";
-  elements.questionWord.textContent = `未同期 ${pendingRecovery.pendingCount}件`;
-  elements.choices.replaceChildren();
-  elements.saveStatus.textContent = "端末に保存済み";
-  elements.saveStatus.dataset.state = "saved";
-  setChoiceDisabled(true);
+  answerSubmission = createReadyAnswerSubmission();
+  await prepareHome(result.content, result.meta);
   setLoginStatus("認証済み・復旧中", "pending");
 }
 
@@ -206,39 +242,45 @@ async function prepareHome(content, meta) {
   const wordStates = await repository.wordStates.getAllByIndex("studentId", authSession.studentId);
   const now = new Date(currentTimestamp());
   const learningDate = toLearningDate(now);
-  const activePair = await findActiveSession(repository, authSession.studentId);
-  const existingPair = activePair ?? await findSessionByLearningDate(
+  const savedSessionResult = await loadSafeHomeSessionPair({
     repository,
-    authSession.studentId,
+    studentId: authSession.studentId,
     learningDate
-  );
+  });
 
   homeContext = Object.freeze({
     contentVersion: meta.contentVersion,
     learningDate
   });
-  homeSessionPair = existingPair === null
+  homeSessionPair = savedSessionResult.pair === null
     ? null
-    : Object.freeze({ session: existingPair.session, queue: existingPair.queue });
-  const model = createHomeViewModel({
-    contentItems: contentRecords,
-    wordStates,
-    session: homeSessionPair?.session ?? null,
-    dailyQueue: homeSessionPair?.queue ?? null,
-    learningDate
+    : Object.freeze({
+      session: savedSessionResult.pair.session,
+      queue: savedSessionResult.pair.queue
+    });
+  homeModelData = Object.freeze({
+    wordStates: Object.freeze([...wordStates]),
+    learningDate,
+    invalidSessionMessage: savedSessionResult.error
   });
 
   answerLocked = true;
-  elements.homeStatus.textContent = "";
-  elements.homeStatus.dataset.state = "idle";
-  homeView.render(model);
+  renderCurrentHomeModel();
   elements.loginPanel.hidden = true;
   elements.homePanel.hidden = false;
   elements.studyPanel.hidden = true;
+  setBackHomeState({ hidden: true, disabled: true });
+  updateOperationalStatus(syncWorker.getSnapshot());
 }
 
 async function handleHomeStart() {
-  if (!homeContext || !authSession) throw new Error("Home is not ready to start learning.");
+  if (
+    !homeContext
+    || !authSession
+    || serverStateStatus !== SERVER_STATE_STATUSES.restored
+  ) {
+    throw new Error("Home is not ready to start learning.");
+  }
   const wordStates = await repository.wordStates.getAllByIndex("studentId", authSession.studentId);
   const createdSessionId = crypto.randomUUID().toLowerCase();
   const result = await startOrResumeSession({
@@ -261,7 +303,11 @@ async function handleHomeStart() {
 }
 
 async function handleHomeResume() {
-  if (!homeSessionPair || homeSessionPair.session.status !== SESSION_STATUSES.active) {
+  if (
+    serverStateStatus !== SERVER_STATE_STATUSES.restored
+    || !homeSessionPair
+    || homeSessionPair.session.status !== SESSION_STATUSES.active
+  ) {
     throw new Error("An active saved Session is required to resume.");
   }
   await openSavedSession(homeSessionPair.session, homeSessionPair.queue);
@@ -285,12 +331,73 @@ async function openSavedSession(session, queue) {
   elements.loginPanel.hidden = true;
   elements.homePanel.hidden = true;
   elements.studyPanel.hidden = false;
+  setBackHomeState({ hidden: false, disabled: false });
   renderActiveQuestion();
+}
+
+function renderCurrentHomeModel() {
+  if (!homeView || !homeModelData) return;
+  if (homeModelData.invalidSessionMessage !== null) {
+    serverStateStatus = SERVER_STATE_STATUSES.error;
+    homeView.render(createInvalidSessionHomeViewModel(homeModelData.invalidSessionMessage));
+    return;
+  }
+
+  const actionsAllowed = serverStateStatus === SERVER_STATE_STATUSES.restored;
+  const actionBlockedReason = actionsAllowed
+    ? null
+    : SERVER_STATE_MESSAGES[serverStateStatus];
+  try {
+    homeView.render(createHomeViewModel({
+      contentItems: contentRecords,
+      wordStates: homeModelData.wordStates,
+      session: homeSessionPair?.session ?? null,
+      dailyQueue: homeSessionPair?.queue ?? null,
+      learningDate: homeModelData.learningDate,
+      newSessionAllowed: actionsAllowed,
+      savedSessionResumeAllowed: actionsAllowed,
+      actionBlockedReason
+    }));
+  } catch {
+    serverStateStatus = SERVER_STATE_STATUSES.error;
+    homeView.render(createInvalidSessionHomeViewModel(
+      "保存済みの学習状態が不整合のため、データを変更せず停止しています。"
+    ));
+  }
 }
 
 function handleHomeActionError() {
   elements.homeStatus.textContent = "学習を開始できませんでした。もう一度お試しください。";
   elements.homeStatus.dataset.state = "error";
+}
+
+function handleBackHome() {
+  if (
+    !authSession
+    || !homeContext
+    || elements.studyPanel.hidden
+    || answerPersistenceInProgress
+    || homeTransitionPromise !== null
+  ) {
+    return;
+  }
+
+  setBackHomeState({ hidden: false, disabled: true });
+  speechController.cancel();
+  clearFeedbackTransition();
+  resetAnswerFeedback(elements.feedback);
+  const task = prepareHome(contentRecords, homeContext).catch(() => {
+    elements.saveStatus.textContent = "Homeへ戻れませんでした。もう一度お試しください";
+    elements.saveStatus.dataset.state = "error";
+  });
+  const trackedTask = task.finally(() => {
+    if (homeTransitionPromise !== trackedTask) return;
+    homeTransitionPromise = null;
+    if (!elements.studyPanel.hidden) {
+      setBackHomeState({ hidden: false, disabled: false });
+    }
+  });
+  homeTransitionPromise = trackedTask;
 }
 
 function renderActiveQuestion() {
@@ -343,6 +450,7 @@ function renderActiveQuestion() {
   }));
   elements.replaySpeech.hidden = false;
   elements.replaySpeech.disabled = false;
+  setBackHomeState({ hidden: false, disabled: false });
   speechController.autoPlayQuestion({
     sessionId: learningSession.sessionId,
     currentPhase: learningSession.currentPhase,
@@ -368,6 +476,7 @@ function renderQuestionChoiceFailure() {
   elements.choices.replaceChildren();
   elements.saveStatus.textContent = "教材データを確認してください";
   elements.saveStatus.dataset.state = "error";
+  setBackHomeState({ hidden: false, disabled: false });
 }
 
 function handleReplaySpeech() {
@@ -378,7 +487,9 @@ function handleReplaySpeech() {
 async function handleAnswer(selectedChoiceId) {
   if (answerLocked || answerSubmission.eventId !== null) return;
   answerLocked = true;
+  answerPersistenceInProgress = true;
   setChoiceDisabled(true);
+  setBackHomeState({ hidden: false, disabled: true });
   const isCorrect = selectedChoiceId === question.wordId;
   const answeredAt = currentTimestamp();
   const answerTimeMs = Math.max(0, Math.round(performance.now() - questionStartedAt));
@@ -434,49 +545,57 @@ async function handleAnswer(selectedChoiceId) {
     resetAnswerFeedback(elements.feedback);
     elements.saveStatus.textContent = "端末への保存に失敗しました。もう一度回答してください";
     elements.saveStatus.dataset.state = "error";
+    answerPersistenceInProgress = false;
     answerLocked = false;
     setChoiceDisabled(false);
+    setBackHomeState({ hidden: false, disabled: false });
     return;
   }
 
+  answerPersistenceInProgress = false;
   learningSession = sessionUpdate.session;
   dailyQueue = sessionUpdate.queue;
   if (retryAttemptNumber > 0) retryAttemptCounts.set(question.wordId, retryAttemptNumber);
   answerSubmission = markAnswerPersisted(event.eventId);
   elements.saveStatus.textContent = "端末に保存済み";
   elements.saveStatus.dataset.state = "saved";
+  setBackHomeState({ hidden: false, disabled: false });
   beginAnswerFeedback(selectedChoiceId, isCorrect);
   void syncWorker.notifyPending();
 }
 
 function handleRetrySync() {
-  if (!syncWorker || !authSession) return;
+  if (!syncWorker || !authSession || syncRetryPromise !== null) return;
   const snapshot = syncWorker.getSnapshot();
   if (pendingRecovery && snapshot.pendingCount === 0) {
     void completePendingRecovery();
     return;
   }
-  elements.retrySync.disabled = true;
-  void syncWorker.notifyPending();
+  if (pendingRecovery) transitionServerState(SERVER_STATE_STATUSES.syncing);
+  setRetryButtonsDisabled(true);
+  const task = syncWorker.notifyPending();
+  const trackedTask = task.finally(() => {
+    if (syncRetryPromise !== trackedTask) return;
+    syncRetryPromise = null;
+    updateOperationalStatus(syncWorker.getSnapshot());
+  });
+  syncRetryPromise = trackedTask;
 }
 
-async function completePendingRecovery() {
-  if (recoverySyncing || !pendingRecovery || !authSession) return;
-  recoverySyncing = true;
-  elements.retrySync.disabled = true;
+function completePendingRecovery() {
+  if (recoveryOperationPromise !== null) return recoveryOperationPromise;
+  if (!pendingRecovery || !authSession) return Promise.resolve();
 
-  try {
+  const task = (async () => {
+    transitionServerState(SERVER_STATE_STATUSES.loading);
+    setRetryButtonsDisabled(true);
     const restored = await restoreStudentState({ apiClient, repository, authSession });
     if (!restored.ok) {
       if (isSessionExpiredApiError(restored.error)) {
         await requireReauthentication(authSession);
         return;
       }
-      elements.saveStatus.textContent = "端末に保存済み";
-      elements.saveStatus.dataset.state = "saved";
-      elements.retrySync.hidden = false;
-      elements.retrySync.disabled = false;
-      elements.retrySync.textContent = "学習状態の復元を再試行";
+      transitionServerState(SERVER_STATE_STATUSES.error);
       setLoginStatus("学習状態の復元に失敗・再試行できます", "error");
       return;
     }
@@ -485,17 +604,21 @@ async function completePendingRecovery() {
     const meta = pendingRecovery.meta;
     pendingRecovery = null;
     await prepareHome(content, meta);
-    elements.saveStatus.textContent = "端末に保存済み";
-    elements.saveStatus.dataset.state = "saved";
+    if (serverStateStatus !== SERVER_STATE_STATUSES.error) {
+      transitionServerState(SERVER_STATE_STATUSES.restored);
+    }
     setLoginStatus("認証済み", "saved");
-  } catch (error) {
-    elements.retrySync.hidden = false;
-    elements.retrySync.disabled = false;
-    elements.retrySync.textContent = "学習状態の復元を再試行";
+  })().catch(() => {
+    transitionServerState(SERVER_STATE_STATUSES.error);
     setLoginStatus("学習状態の復元に失敗・再試行できます", "error");
-  } finally {
-    recoverySyncing = false;
-  }
+  });
+  const trackedTask = task.finally(() => {
+    if (recoveryOperationPromise !== trackedTask) return;
+    recoveryOperationPromise = null;
+    updateOperationalStatus(syncWorker.getSnapshot());
+  });
+  recoveryOperationPromise = trackedTask;
+  return trackedTask;
 }
 
 function advanceAfterFeedback() {
@@ -528,6 +651,7 @@ function renderSessionComplete(message) {
   elements.choices.replaceChildren();
   elements.saveStatus.textContent = "端末に保存済み";
   elements.saveStatus.dataset.state = "saved";
+  setBackHomeState({ hidden: false, disabled: false });
 }
 
 function countRetryAttempts(events) {
@@ -546,6 +670,11 @@ async function requireReauthentication(expiredSession) {
   elements.replaySpeech.disabled = true;
   elements.retrySync.disabled = true;
   elements.retrySync.hidden = true;
+  if (elements.homeRetrySync) {
+    elements.homeRetrySync.disabled = true;
+    elements.homeRetrySync.hidden = true;
+  }
+  setBackHomeState({ hidden: true, disabled: true });
   const sessionToInvalidate = expiredSession;
   authSession = null;
   if (syncWorker?.getSnapshot().status !== ANSWER_SYNC_WORKER_STATES.pausedAuth) {
@@ -555,6 +684,8 @@ async function requireReauthentication(expiredSession) {
     await invalidateAuthSession({ repository, authSession: sessionToInvalidate });
   }
   answerLocked = true;
+  pendingRecovery = null;
+  transitionServerState(SERVER_STATE_STATUSES.idle);
   elements.loginPanel.hidden = false;
   elements.homePanel.hidden = true;
   elements.studyPanel.hidden = false;
@@ -574,6 +705,17 @@ function handlePageHide() {
 
 function setChoiceDisabled(disabled) {
   for (const button of elements.choices.querySelectorAll("button")) button.disabled = disabled;
+}
+
+function setBackHomeState({ hidden, disabled }) {
+  if (!elements.backHome) return;
+  elements.backHome.hidden = hidden;
+  elements.backHome.disabled = disabled;
+}
+
+function setRetryButtonsDisabled(disabled) {
+  elements.retrySync.disabled = disabled;
+  if (elements.homeRetrySync) elements.homeRetrySync.disabled = disabled;
 }
 
 function beginAnswerFeedback(selectedChoiceId, isCorrect) {
@@ -620,7 +762,7 @@ function handleSyncSnapshot(snapshot) {
     setSyncStatus(`同期待ち ${snapshot.pendingCount}件`, "pending");
     elements.retrySync.textContent = "同期を再試行";
     elements.retrySync.hidden = authSession === null;
-    elements.retrySync.disabled = authSession === null;
+    elements.retrySync.disabled = authSession === null || syncRetryPromise !== null;
   } else if (snapshot.status === ANSWER_SYNC_WORKER_STATES.failed) {
     setSyncStatus(`同期確認が必要 ${snapshot.pendingCount}件`, "error");
     elements.retrySync.hidden = true;
@@ -639,14 +781,79 @@ function handleSyncSnapshot(snapshot) {
     elements.retrySync.disabled = false;
   }
 
-  if (
-    pendingRecovery
-    && snapshot.status === ANSWER_SYNC_WORKER_STATES.idle
-    && snapshot.pendingCount === 0
-    && !recoverySyncing
-  ) {
-    void completePendingRecovery();
+  if (pendingRecovery) {
+    if (snapshot.status === ANSWER_SYNC_WORKER_STATES.sending) {
+      transitionServerState(SERVER_STATE_STATUSES.syncing);
+    } else if (
+      snapshot.status === ANSWER_SYNC_WORKER_STATES.pending
+      || snapshot.status === ANSWER_SYNC_WORKER_STATES.failed
+      || snapshot.status === ANSWER_SYNC_WORKER_STATES.pausedAuth
+    ) {
+      transitionServerState(SERVER_STATE_STATUSES.blocked);
+    } else if (
+      snapshot.status === ANSWER_SYNC_WORKER_STATES.idle
+      && snapshot.pendingCount === 0
+    ) {
+      void completePendingRecovery();
+    }
   }
+  updateOperationalStatus(snapshot);
+}
+
+function transitionServerState(nextStatus) {
+  if (!Object.values(SERVER_STATE_STATUSES).includes(nextStatus)) {
+    throw new TypeError(`Unsupported server state status: ${nextStatus}`);
+  }
+  serverStateStatus = nextStatus;
+  renderCurrentHomeModel();
+  updateOperationalStatus(syncWorker?.getSnapshot() ?? null);
+}
+
+function updateOperationalStatus(snapshot) {
+  elements.homePanel.dataset.serverState = serverStateStatus;
+  const pendingCount = snapshot?.pendingCount ?? 0;
+  let message = SERVER_STATE_MESSAGES[serverStateStatus];
+  let state = "idle";
+
+  if (serverStateStatus === SERVER_STATE_STATUSES.syncing) {
+    message = pendingCount > 0
+      ? `未同期の回答を送信しています… ${pendingCount}件`
+      : SERVER_STATE_MESSAGES.syncing;
+    state = "working";
+  } else if (serverStateStatus === SERVER_STATE_STATUSES.loading) {
+    state = "working";
+  } else if (
+    serverStateStatus === SERVER_STATE_STATUSES.blocked
+    || serverStateStatus === SERVER_STATE_STATUSES.error
+  ) {
+    state = "error";
+  } else if (
+    serverStateStatus === SERVER_STATE_STATUSES.restored
+    && pendingCount > 0
+  ) {
+    message = `同期待ち ${pendingCount}件`;
+    state = "pending";
+  }
+
+  elements.homeStatus.textContent = message;
+  elements.homeStatus.dataset.state = state;
+  if (!elements.homeRetrySync) return;
+
+  const canRetryPending = pendingRecovery !== null
+    && snapshot?.status === ANSWER_SYNC_WORKER_STATES.pending;
+  const canRetryRestore = pendingRecovery !== null
+    && pendingCount === 0
+    && serverStateStatus === SERVER_STATE_STATUSES.error;
+  elements.homeRetrySync.textContent = canRetryRestore
+    ? "学習状態の復元を再試行"
+    : "同期を再試行";
+  elements.homeRetrySync.hidden = !(canRetryPending || canRetryRestore);
+  elements.homeRetrySync.disabled = (
+    authSession === null
+    || syncRetryPromise !== null
+    || recoveryOperationPromise !== null
+    || snapshot?.status === ANSWER_SYNC_WORKER_STATES.sending
+  );
 }
 
 function setSyncStatus(message, state) {

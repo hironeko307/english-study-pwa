@@ -37,6 +37,7 @@
       <section id="v2HomePanel" class="v2-home-panel" hidden>
         <div id="v2HomeRoot"></div>
         <p id="v2HomeStatus" class="home-status" data-state="idle" role="status" aria-live="polite"></p>
+        <button id="v2HomeRetrySync" class="retry-button" type="button" hidden>同期を再試行</button>
       </section>
 
       <section id="v2StudyPanel" class="v2-section" aria-labelledby="v2QuestionWord" hidden>
@@ -50,6 +51,7 @@
         <p id="v2SaveStatus" class="save-status" data-state="idle" aria-live="polite">回答を選択してください</p>
         <p id="v2SyncStatus" class="sync-status" data-state="saved" aria-live="polite">すべて同期済み</p>
         <button id="v2RetrySync" class="retry-button" type="button" hidden>同期を再試行</button>
+        <button id="v2BackHome" class="back-home-button" type="button" hidden>途中でやめる</button>
       </section>
     </main>
     <script type="module" src="./src/v2/app/version2App.js"></script>

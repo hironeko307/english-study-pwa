@@ -81,7 +81,8 @@ export function createHomeView({ root, onStart = () => undefined, onResume = () 
 
   function updateCta() {
     const actionable = Boolean(currentModel?.canStart || currentModel?.canResume);
-    cta.hidden = !actionable;
+    const visible = typeof currentModel?.ctaLabel === "string";
+    cta.hidden = !visible;
     cta.disabled = !actionable || pending;
     cta.textContent = pending ? "準備中…" : currentModel?.ctaLabel ?? "";
     cta.setAttribute("aria-busy", String(pending));

@@ -10,7 +10,8 @@ export const HOME_MODES = Object.freeze({
   newStart: "newStart",
   resume: "resume",
   completed: "completed",
-  noLearning: "noLearning"
+  noLearning: "noLearning",
+  invalidSession: "invalidSession"
 });
 
 const HOME_MESSAGES = Object.freeze({
@@ -24,15 +25,24 @@ export function createHomeViewModel({
   session = null,
   dailyQueue = null,
   learningDate,
+  newSessionAllowed = true,
+  savedSessionResumeAllowed = true,
+  actionBlockedReason = null,
   defaultNewPerDay = DEFAULT_NEW_PER_DAY,
   dailyNormalQuestionCap = DAILY_NORMAL_QUESTION_CAP
 }) {
   assertDateOnly(learningDate, "learningDate");
   assertNonNegativeInteger(defaultNewPerDay, "defaultNewPerDay");
   assertNonNegativeInteger(dailyNormalQuestionCap, "dailyNormalQuestionCap");
+  assertBoolean(newSessionAllowed, "newSessionAllowed");
+  assertBoolean(savedSessionResumeAllowed, "savedSessionResumeAllowed");
+  assertNullableString(actionBlockedReason, "actionBlockedReason");
 
   if (session !== null) {
-    return createSessionModel(session, dailyQueue);
+    return createSessionModel(session, dailyQueue, {
+      savedSessionResumeAllowed,
+      actionBlockedReason
+    });
   }
   if (dailyQueue !== null) {
     throw new Error("dailyQueue cannot exist without a Session.");
@@ -68,9 +78,26 @@ export function createHomeViewModel({
     remainingCount: counts.normalQuestionCount,
     retryRemainingCount: null,
     ctaLabel: "学習を始める",
-    canStart: true,
+    canStart: newSessionAllowed,
     canResume: false,
-    message: null
+    message: newSessionAllowed ? null : actionBlockedReason
+  });
+}
+
+export function createInvalidSessionHomeViewModel(message) {
+  assertNonEmptyString(message, "message");
+  return freezeModel({
+    mode: HOME_MODES.invalidSession,
+    dueReviewCount: null,
+    newCount: null,
+    normalQuestionCount: null,
+    completedCount: null,
+    remainingCount: null,
+    retryRemainingCount: null,
+    ctaLabel: null,
+    canStart: false,
+    canResume: false,
+    message
   });
 }
 
@@ -115,7 +142,10 @@ function calculateNewSessionCounts({
   });
 }
 
-function createSessionModel(session, dailyQueue) {
+function createSessionModel(session, dailyQueue, {
+  savedSessionResumeAllowed,
+  actionBlockedReason
+}) {
   assertSession(session);
   if (session.status === SESSION_STATUSES.completed) {
     return freezeModel({
@@ -153,8 +183,8 @@ function createSessionModel(session, dailyQueue) {
     retryRemainingCount,
     ctaLabel: "続きから",
     canStart: false,
-    canResume: true,
-    message: null
+    canResume: savedSessionResumeAllowed,
+    message: savedSessionResumeAllowed ? null : actionBlockedReason
   });
 }
 
@@ -223,6 +253,16 @@ function assertNonNegativeInteger(value, fieldName) {
 function assertNonEmptyString(value, fieldName) {
   if (typeof value !== "string" || value.length === 0) {
     throw new TypeError(`${fieldName} must be a non-empty string.`);
+  }
+}
+
+function assertBoolean(value, fieldName) {
+  if (typeof value !== "boolean") throw new TypeError(`${fieldName} must be a boolean.`);
+}
+
+function assertNullableString(value, fieldName) {
+  if (value !== null && (typeof value !== "string" || value.length === 0)) {
+    throw new TypeError(`${fieldName} must be null or a non-empty string.`);
   }
 }
 

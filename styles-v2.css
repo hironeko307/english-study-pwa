@@ -273,6 +273,15 @@ button:disabled { cursor: default; opacity: 0.58; }
   font-weight: 700;
 }
 
+.back-home-button {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 16px;
+  background: #fff;
+  color: #17212b;
+  font-weight: 700;
+}
+
 @media (max-width: 520px) {
   .choice-grid { grid-template-columns: 1fr; }
   .v2-shell { padding-top: 18px; }
