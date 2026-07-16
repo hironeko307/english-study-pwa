@@ -217,9 +217,27 @@ button:disabled { cursor: default; opacity: 0.58; }
   display: none;
 }
 
-.question-word {
+.question-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin: 12px 0 24px;
+}
+
+.question-word {
+  margin: 0;
   font-size: 2rem;
+}
+
+.speech-replay-button {
+  flex: 0 0 48px;
+  width: 48px;
+  min-height: 48px;
+  padding: 0;
+  background: #fff;
+  color: #17212b;
+  font-size: 1.35rem;
 }
 
 .choice-grid {

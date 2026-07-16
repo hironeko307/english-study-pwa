@@ -25,6 +25,7 @@ import {
   restoreStudentState
 } from "../services/authContentService.js";
 import { createHomeViewModel } from "../services/homeService.js";
+import { createSpeechService } from "../services/speechService.js";
 import {
   ANSWER_SYNC_WORKER_STATES,
   createAnswerSyncWorker,
@@ -35,6 +36,7 @@ import {
   createReadyAnswerSubmission,
   markAnswerPersisted
 } from "./answerSubmissionState.js";
+import { createVersion2SpeechController } from "./version2SpeechController.js";
 import { createHomeView } from "../ui/homeView.js";
 
 const elements = {
@@ -50,6 +52,7 @@ const elements = {
   studyPanel: document.querySelector("#v2StudyPanel"),
   questionMeta: document.querySelector("#v2QuestionMeta"),
   questionWord: document.querySelector("#v2QuestionWord"),
+  replaySpeech: document.querySelector("#v2ReplaySpeech"),
   choices: document.querySelector("#v2Choices"),
   feedback: document.querySelector("#v2Feedback"),
   saveStatus: document.querySelector("#v2SaveStatus"),
@@ -81,8 +84,12 @@ let loginInProgress = false;
 let feedbackTimerId = null;
 let feedbackDelayElapsed = false;
 let feedbackAdvanceCompleted = false;
+let pageHideListenerRegistered = false;
 
 const SESSION_EXPIRED_MESSAGE = "セッションの有効期限が切れました。再ログインしてください";
+const speechController = createVersion2SpeechController({
+  speechService: createSpeechService()
+});
 
 export const version2AppReady = initialize();
 
@@ -103,7 +110,9 @@ async function initialize() {
   elements.endpoint.value = localStorage.getItem("vg2500.v2.endpoint") ?? "";
   elements.login.addEventListener("click", handleLogin);
   elements.retrySync.addEventListener("click", handleRetrySync);
+  elements.replaySpeech.addEventListener("click", handleReplaySpeech);
   elements.homeRoot.addEventListener("homeactionerror", handleHomeActionError);
+  registerPageHideListener();
   homeView = createHomeView({
     root: elements.homeRoot,
     onStart: handleHomeStart,
@@ -160,8 +169,11 @@ async function handleLogin() {
 }
 
 function enterPendingRecovery(result) {
+  speechController.cancel();
   clearFeedbackTransition();
   resetAnswerFeedback(elements.feedback);
+  elements.replaySpeech.hidden = true;
+  elements.replaySpeech.disabled = true;
   pendingRecovery = Object.freeze({
     content: result.content,
     meta: result.meta,
@@ -182,6 +194,9 @@ function enterPendingRecovery(result) {
 }
 
 async function prepareHome(content, meta) {
+  speechController.cancel();
+  elements.replaySpeech.hidden = true;
+  elements.replaySpeech.disabled = true;
   if (!Array.isArray(content) || content.length < 4) {
     throw new Error("出題に必要な教材を取得できませんでした。");
   }
@@ -252,6 +267,7 @@ async function handleHomeResume() {
 }
 
 async function openSavedSession(session, queue) {
+  speechController.startStudyEntry();
   learningSession = session;
   dailyQueue = queue;
 
@@ -312,6 +328,25 @@ function renderActiveQuestion() {
     button.addEventListener("click", () => handleAnswer(choice.wordId));
     return button;
   }));
+  elements.replaySpeech.hidden = false;
+  elements.replaySpeech.disabled = false;
+  speechController.autoPlayQuestion({
+    sessionId: learningSession.sessionId,
+    currentPhase: learningSession.currentPhase,
+    retryRound: learningSession.currentPhase === SESSION_PHASES.immediateRetry
+      ? learningSession.retryRound
+      : 0,
+    currentIndex: learningSession.currentPhase === SESSION_PHASES.immediateRetry
+      ? dailyQueue.retryCurrentIndex
+      : dailyQueue.normalCurrentIndex,
+    wordId: question.wordId,
+    text: question.word
+  });
+}
+
+function handleReplaySpeech() {
+  if (elements.studyPanel.hidden || elements.replaySpeech.hidden || !question) return;
+  speechController.replay(question.word);
 }
 
 async function handleAnswer(selectedChoiceId) {
@@ -438,6 +473,7 @@ async function completePendingRecovery() {
 }
 
 function advanceAfterFeedback() {
+  speechController.cancel();
   clearFeedbackTransition();
   resetAnswerFeedback(elements.feedback);
   sessionAnswerSequence += 1;
@@ -453,9 +489,12 @@ function createQuestionProgressText() {
 }
 
 function renderSessionComplete(message) {
+  speechController.cancel();
   answerLocked = true;
   question = null;
   choiceIds = [];
+  elements.replaySpeech.hidden = true;
+  elements.replaySpeech.disabled = true;
   clearFeedbackTransition();
   resetAnswerFeedback(elements.feedback);
   elements.questionMeta.textContent = learningSession ? "本日のSession / 完了" : "本日のSession";
@@ -475,7 +514,10 @@ function countRetryAttempts(events) {
 }
 
 async function requireReauthentication(expiredSession) {
+  speechController.cancel();
   clearFeedbackTransition();
+  elements.replaySpeech.hidden = true;
+  elements.replaySpeech.disabled = true;
   elements.retrySync.disabled = true;
   elements.retrySync.hidden = true;
   const sessionToInvalidate = expiredSession;
@@ -492,6 +534,16 @@ async function requireReauthentication(expiredSession) {
   elements.studyPanel.hidden = false;
   setChoiceDisabled(true);
   setLoginStatus(SESSION_EXPIRED_MESSAGE, "error");
+}
+
+function registerPageHideListener() {
+  if (pageHideListenerRegistered) return;
+  window.addEventListener("pagehide", handlePageHide);
+  pageHideListenerRegistered = true;
+}
+
+function handlePageHide() {
+  speechController.cancel();
 }
 
 function setChoiceDisabled(disabled) {

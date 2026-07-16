@@ -41,7 +41,10 @@
 
       <section id="v2StudyPanel" class="v2-section" aria-labelledby="v2QuestionWord" hidden>
         <p id="v2QuestionMeta" class="question-meta">Section -</p>
-        <h2 id="v2QuestionWord" class="question-word">word</h2>
+        <div class="question-prompt">
+          <h2 id="v2QuestionWord" class="question-word">word</h2>
+          <button id="v2ReplaySpeech" class="speech-replay-button" type="button" aria-label="英単語をもう一度聞く" hidden>🔊</button>
+        </div>
         <div id="v2Choices" class="choice-grid"></div>
         <div id="v2Feedback" class="feedback" role="status" aria-live="polite"></div>
         <p id="v2SaveStatus" class="save-status" data-state="idle" aria-live="polite">回答を選択してください</p>
