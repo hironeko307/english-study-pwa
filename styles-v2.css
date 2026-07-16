@@ -65,7 +65,8 @@ h1 { font-size: 1.75rem; }
 }
 
 .section-heading strong,
-.save-status {
+.save-status,
+.sync-status {
   min-height: 24px;
   color: #52616f;
 }
@@ -238,6 +239,12 @@ button:disabled { cursor: default; opacity: 0.58; }
 .save-status {
   margin: 20px 0 0;
   font-weight: 800;
+}
+
+.sync-status {
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
+  font-weight: 700;
 }
 
 .retry-button {
