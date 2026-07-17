@@ -2,6 +2,13 @@ import { STORE_NAMES } from "../data/schema.js";
 
 const UNSYNCED_ANSWER_STATUSES = Object.freeze(["pending", "sending", "failed"]);
 const SESSION_EXPIRED_ERROR_CODE = "SESSION_EXPIRED";
+const RETRYABLE_FAILED_ERROR_CODES = new Set(["INTERNAL_ERROR"]);
+const SAFE_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+export const FAILED_RETRY_DISPOSITIONS = Object.freeze({
+  retryable: "retryable",
+  nonRetryable: "nonRetryable"
+});
 
 export const ANSWER_SYNC_WORKER_STATES = Object.freeze({
   idle: "idle",
@@ -19,6 +26,18 @@ export function isSessionExpiredApiError(error) {
     && error.code === SESSION_EXPIRED_ERROR_CODE
     && typeof error.message === "string"
     && Object.prototype.hasOwnProperty.call(error, "details");
+}
+
+export function classifyFailedAnswerError(errorCode) {
+  return RETRYABLE_FAILED_ERROR_CODES.has(toSafeSyncErrorCode(errorCode))
+    ? FAILED_RETRY_DISPOSITIONS.retryable
+    : FAILED_RETRY_DISPOSITIONS.nonRetryable;
+}
+
+export function toSafeSyncErrorCode(errorCode) {
+  return typeof errorCode === "string" && SAFE_ERROR_CODE_PATTERN.test(errorCode)
+    ? errorCode
+    : "UNKNOWN";
 }
 
 export async function persistAnswerTransaction(repository, {
@@ -168,9 +187,11 @@ export function createAnswerSyncWorker({
   }
 
   const listeners = new Set();
+  const failedRetryDrainToken = Object.freeze({});
   let authSession = null;
   let studentId = null;
   let drainPromise = null;
+  let retryFailedPromise = null;
   let drainRequested = false;
   let disposed = false;
   let snapshot = freezeWorkerSnapshot({
@@ -206,7 +227,15 @@ export function createAnswerSyncWorker({
     return snapshot;
   }
 
-  function notifyPending() {
+  function notifyPending(drainToken = null) {
+    if (retryFailedPromise !== null && drainToken !== failedRetryDrainToken) {
+      drainRequested = true;
+      return retryFailedPromise;
+    }
+    return requestDrain();
+  }
+
+  function requestDrain() {
     if (disposed) return Promise.resolve(snapshot);
     drainRequested = true;
     if (drainPromise !== null) return drainPromise;
@@ -233,6 +262,61 @@ export function createAnswerSyncWorker({
     });
     drainPromise = trackedTask;
     return trackedTask;
+  }
+
+  function retryFailed() {
+    if (disposed) return Promise.resolve(snapshot);
+    if (retryFailedPromise !== null) return retryFailedPromise;
+
+    const task = runFailedRetry().catch(async () => {
+      const records = await readRecords().catch(() => []);
+      publishFromRecords(
+        ANSWER_SYNC_WORKER_STATES.failed,
+        records,
+        "LOCAL_SYNC_WORKER_ERROR"
+      );
+      return snapshot;
+    });
+    const trackedTask = task.finally(() => {
+      if (retryFailedPromise === trackedTask) retryFailedPromise = null;
+    });
+    retryFailedPromise = trackedTask;
+    return trackedTask;
+  }
+
+  async function runFailedRetry() {
+    if (drainPromise !== null) await drainPromise;
+    if (disposed) return snapshot;
+
+    const records = await readRecords();
+    if (authSession === null) {
+      publishFromRecords(ANSWER_SYNC_WORKER_STATES.pausedAuth, records, null);
+      return snapshot;
+    }
+
+    const failedRecord = records.find(({ queueItem }) => queueItem.status === "failed");
+    if (!failedRecord) {
+      publishFromRecords(
+        records.length === 0
+          ? ANSWER_SYNC_WORKER_STATES.idle
+          : ANSWER_SYNC_WORKER_STATES.pending,
+        records,
+        null
+      );
+      return snapshot;
+    }
+
+    const errorCode = toSafeSyncErrorCode(failedRecord.queueItem.lastErrorCode);
+    if (classifyFailedAnswerError(errorCode) !== FAILED_RETRY_DISPOSITIONS.retryable) {
+      publishFromRecords(ANSWER_SYNC_WORKER_STATES.failed, records, errorCode);
+      return snapshot;
+    }
+
+    await repository.syncQueue.put({
+      ...failedRecord.queueItem,
+      status: "pending"
+    });
+    return notifyPending(failedRetryDrainToken);
   }
 
   function dispose() {
@@ -365,6 +449,7 @@ export function createAnswerSyncWorker({
 
   return Object.freeze({
     notifyPending,
+    retryFailed,
     resume,
     pauseAuth,
     getSnapshot,
@@ -481,12 +566,18 @@ async function markFailed(repository, queueItem, attemptAt, errorCode) {
 }
 
 function freezeWorkerSnapshot({ status, pendingCount, failedCount, lastErrorCode }) {
+  const safeLastErrorCode = lastErrorCode === null
+    ? null
+    : toSafeSyncErrorCode(lastErrorCode);
   return Object.freeze({
     status,
     pendingCount,
     failedCount,
     inFlight: status === ANSWER_SYNC_WORKER_STATES.sending,
-    lastErrorCode
+    lastErrorCode: safeLastErrorCode,
+    canRetryFailed: status === ANSWER_SYNC_WORKER_STATES.failed
+      && failedCount > 0
+      && classifyFailedAnswerError(safeLastErrorCode) === FAILED_RETRY_DISPOSITIONS.retryable
   });
 }
 

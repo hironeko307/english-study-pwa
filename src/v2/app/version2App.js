@@ -346,7 +346,7 @@ function renderCurrentHomeModel() {
   const actionsAllowed = serverStateStatus === SERVER_STATE_STATUSES.restored;
   const actionBlockedReason = actionsAllowed
     ? null
-    : SERVER_STATE_MESSAGES[serverStateStatus];
+    : getServerStateMessage(serverStateStatus, syncWorker?.getSnapshot() ?? null);
   try {
     homeView.render(createHomeViewModel({
       contentItems: contentRecords,
@@ -571,15 +571,24 @@ function handleRetrySync() {
     void completePendingRecovery();
     return;
   }
-  if (pendingRecovery) transitionServerState(SERVER_STATE_STATUSES.syncing);
-  setRetryButtonsDisabled(true);
-  const task = syncWorker.notifyPending();
+  if (
+    snapshot.status === ANSWER_SYNC_WORKER_STATES.failed
+    && !snapshot.canRetryFailed
+  ) {
+    updateOperationalStatus(snapshot);
+    return;
+  }
+  const task = snapshot.status === ANSWER_SYNC_WORKER_STATES.failed
+    ? syncWorker.retryFailed()
+    : syncWorker.notifyPending();
   const trackedTask = task.finally(() => {
     if (syncRetryPromise !== trackedTask) return;
     syncRetryPromise = null;
     updateOperationalStatus(syncWorker.getSnapshot());
   });
   syncRetryPromise = trackedTask;
+  setRetryButtonsDisabled(true);
+  if (pendingRecovery) transitionServerState(SERVER_STATE_STATUSES.syncing);
 }
 
 function completePendingRecovery() {
@@ -764,9 +773,14 @@ function handleSyncSnapshot(snapshot) {
     elements.retrySync.hidden = authSession === null;
     elements.retrySync.disabled = authSession === null || syncRetryPromise !== null;
   } else if (snapshot.status === ANSWER_SYNC_WORKER_STATES.failed) {
-    setSyncStatus(`同期確認が必要 ${snapshot.pendingCount}件`, "error");
-    elements.retrySync.hidden = true;
-    elements.retrySync.disabled = true;
+    setSyncStatus(getFailedSyncMessage(snapshot, snapshot.pendingCount), "error");
+    elements.retrySync.textContent = "同期を再試行";
+    elements.retrySync.hidden = authSession === null || !snapshot.canRetryFailed;
+    elements.retrySync.disabled = (
+      authSession === null
+      || !snapshot.canRetryFailed
+      || syncRetryPromise !== null
+    );
   } else if (snapshot.status === ANSWER_SYNC_WORKER_STATES.pausedAuth) {
     setSyncStatus(`再ログインが必要・未同期 ${snapshot.pendingCount}件`, "error");
     elements.retrySync.hidden = true;
@@ -812,7 +826,7 @@ function transitionServerState(nextStatus) {
 function updateOperationalStatus(snapshot) {
   elements.homePanel.dataset.serverState = serverStateStatus;
   const pendingCount = snapshot?.pendingCount ?? 0;
-  let message = SERVER_STATE_MESSAGES[serverStateStatus];
+  let message = getServerStateMessage(serverStateStatus, snapshot);
   let state = "idle";
 
   if (serverStateStatus === SERVER_STATE_STATUSES.syncing) {
@@ -841,19 +855,40 @@ function updateOperationalStatus(snapshot) {
 
   const canRetryPending = pendingRecovery !== null
     && snapshot?.status === ANSWER_SYNC_WORKER_STATES.pending;
+  const canRetryFailed = pendingRecovery !== null
+    && snapshot?.status === ANSWER_SYNC_WORKER_STATES.failed
+    && snapshot.canRetryFailed;
   const canRetryRestore = pendingRecovery !== null
     && pendingCount === 0
     && serverStateStatus === SERVER_STATE_STATUSES.error;
   elements.homeRetrySync.textContent = canRetryRestore
     ? "学習状態の復元を再試行"
     : "同期を再試行";
-  elements.homeRetrySync.hidden = !(canRetryPending || canRetryRestore);
+  elements.homeRetrySync.hidden = !(canRetryPending || canRetryFailed || canRetryRestore);
   elements.homeRetrySync.disabled = (
     authSession === null
+    || (snapshot?.status === ANSWER_SYNC_WORKER_STATES.failed && !snapshot.canRetryFailed)
     || syncRetryPromise !== null
     || recoveryOperationPromise !== null
     || snapshot?.status === ANSWER_SYNC_WORKER_STATES.sending
   );
+}
+
+function getServerStateMessage(status, snapshot) {
+  if (
+    status === SERVER_STATE_STATUSES.blocked
+    && snapshot?.status === ANSWER_SYNC_WORKER_STATES.failed
+  ) {
+    return getFailedSyncMessage(snapshot, snapshot.pendingCount);
+  }
+  return SERVER_STATE_MESSAGES[status];
+}
+
+function getFailedSyncMessage(snapshot, pendingCount) {
+  const errorCode = snapshot?.lastErrorCode ?? "UNKNOWN";
+  return snapshot?.canRetryFailed
+    ? `同期を完了できません。再試行してください。 ${pendingCount}件 (${errorCode})`
+    : `同期データの確認が必要です ${pendingCount}件 (${errorCode})`;
 }
 
 function setSyncStatus(message, state) {
